@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     USER_MAX_ATTEMPTS: int = 5
     IP_MAX_ATTEMPTS: int = 20
     VELOCITY_WEIGHT: float = 0.4
+    
+    GEO_MAX_SPEED_KMH: int = 900
+    GEO_WEIGHT: float = 0.35
+    
+    IP_API_URL: str = "http://ip-api.com/json"
            
     
 settings = Settings()
