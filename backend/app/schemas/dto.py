@@ -15,7 +15,6 @@ class GeoLocation:
     lat: float
     lon: float
     city: str
-    region: str
     country: str
     country_code: str
 
