@@ -1,0 +1,98 @@
+{
+  "model": "IsolationForest",
+  "features": [
+    "ip_type_enc",
+    "is_foreign",
+    "is_known_vpn",
+    "is_datacenter_ip",
+    "is_tor",
+    "suspicious_isp",
+    "latitude",
+    "longitude",
+    "distance_from_last_login_km",
+    "impossible_travel",
+    "high_distance",
+    "is_new_device",
+    "velocity_last_1hr",
+    "velocity_last_24hr",
+    "velocity_ratio",
+    "hours_since_last_login",
+    "hour_of_day",
+    "day_of_week",
+    "hour_deviation",
+    "is_odd_hour"
+  ],
+  "feature_count": 20,
+  "iso_auc": 1.0,
+  "iso_score_min": 0.3554780504670084,
+  "iso_score_max": 0.7241959780638787,
+  "contamination": 0.08,
+  "n_estimators": 300,
+  "ip_type_map": {
+    "residential": 0,
+    "mobile": 1,
+    "datacenter": 2,
+    "vpn": 3,
+    "tor": 4
+  },
+  "risk_tiers": {
+    "ALLOW": [
+      0.0,
+      0.4
+    ],
+    "MFA_STEP_UP": [
+      0.4,
+      0.7
+    ],
+    "ACCOUNT_LOCK": [
+      0.7,
+      0.9
+    ],
+    "HARD_BLOCK": [
+      0.9,
+      1.01
+    ]
+  },
+  "top_features": [
+    [
+      "is_new_device",
+      0.381899
+    ],
+    [
+      "is_odd_hour",
+      0.324338
+    ],
+    [
+      "ip_type_enc",
+      0.308635
+    ],
+    [
+      "longitude",
+      0.262011
+    ],
+    [
+      "latitude",
+      0.228378
+    ],
+    [
+      "hour_deviation",
+      0.194417
+    ],
+    [
+      "distance_from_last_login_km",
+      0.186433
+    ],
+    [
+      "hours_since_last_login",
+      0.184998
+    ],
+    [
+      "hour_of_day",
+      0.184655
+    ],
+    [
+      "velocity_ratio",
+      0.17049
+    ]
+  ]
+}
