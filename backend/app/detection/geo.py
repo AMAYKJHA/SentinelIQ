@@ -24,23 +24,27 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
    
 async def _fetch_geo(ip: str = ""):
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            url = f"http://ip-api.com/json/{ip}"
+
             resp = await client.get(
-                f"http://ip-api.com/json/{ip}",
+                url,
                 params={"fields": "status,lat,lon,city,country,as"}
             )
+
             data = resp.json()
-            
             if data.get("status") != "success":
                 return None
-            print(data)
+
+            asn = data.get("as")
+            asn = asn.split(" ")[0] if asn else "Unknown"
             return GeoLocation(
                 ip=ip,
                 lat=data.get("lat"),
                 lon=data.get("lon"),
                 city=data.get("city", ""),
                 country=data.get("country", ""),
-                country_code=data.get("countryCode", "")
+                asn=asn
             )
     except Exception as e:
         logger.error(e)
@@ -62,7 +66,7 @@ async def _get_last_location(user_id: str, redis: Redis):
         lon=data["lon"],
         city=data["city"],
         country=data["country"],
-        country_code=data["country_code"]
+        asn=data["asn"]
     )
     return loc, data["timestamp"]
     
@@ -73,6 +77,7 @@ async def _store_location(user_id: int, loc: GeoLocation, redis: Redis):
         "lon": loc.lon,
         "city": loc.city,
         "country": loc.country,
+        "asn": loc.asn,
         "timestamp": time.time(),
     })
     
@@ -80,10 +85,12 @@ async def _store_location(user_id: int, loc: GeoLocation, redis: Redis):
     
 
 async def check_geo(
-    user_id: str,
+    user_id: int,
     ip: str,
     redis: Redis
-):
+) -> GeoResult:
+    if settings.DEBUG:
+        ip = ""
     current_loc = await _fetch_geo(ip)
 
     if current_loc is None:
@@ -153,4 +160,5 @@ async def check_geo(
         
 
 if __name__ == "__main__":
-    asyncio.run(_fetch_geo())
+    res = asyncio.run(_fetch_geo())
+    print(res)

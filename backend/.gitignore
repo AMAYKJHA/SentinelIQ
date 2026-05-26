@@ -11,3 +11,6 @@ wheels/
 
 # enviornment file
 .env
+
+# self-test files
+test.py

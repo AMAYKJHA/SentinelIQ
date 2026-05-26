@@ -1,14 +1,21 @@
 "use client";
 
 import { useState } from "react";
+
 import styles from "./page.module.css";
-import { collectDeviceSpec, collectNetworkContext, collectSessionMetadata } from "./collectors";
+import {
+  collectDeviceSpec,
+  collectNetworkContext,
+  collectSessionMetadata,
+} from "./collectors";
 import { useBehavior } from "./useBehavior";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [status, setStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   const { snapshot, onUsernamePaste, onPasswordPaste } = useBehavior();
@@ -49,7 +56,9 @@ export default function LoginPage() {
       setStatus("success");
     } catch (err: unknown) {
       setStatus("error");
-      setErrorMsg(err instanceof Error ? err.message : "Login failed. Please try again.");
+      setErrorMsg(
+        err instanceof Error ? err.message : "Login failed. Please try again.",
+      );
     }
   };
 
@@ -57,7 +66,9 @@ export default function LoginPage() {
     <div className={styles.page}>
       {/* ── Navbar ──────────────────────────────────────────────────── */}
       <header className={styles.navbar}>
-        <a href="/" className={styles.logo}>Innovators Wallet</a>
+        <a href="/" className={styles.logo}>
+          Innovators Wallet
+        </a>
         <nav className={styles.navLinks}>
           <a href="#">Features</a>
           <a href="#">Security</a>
@@ -70,7 +81,14 @@ export default function LoginPage() {
         <div className={styles.card}>
           <div className={styles.cardHeader}>
             <div className={styles.iconWrap}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="28" height="28">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                width="28"
+                height="28"
+              >
                 <rect x="3" y="11" width="18" height="11" rx="2" />
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
               </svg>
@@ -81,7 +99,9 @@ export default function LoginPage() {
 
           <form className={styles.form} onSubmit={handleSubmit} noValidate>
             <div className={styles.field}>
-              <label htmlFor="email" className={styles.label}>Email address</label>
+              <label htmlFor="email" className={styles.label}>
+                Email address
+              </label>
               <input
                 id="email"
                 type="email"
@@ -98,7 +118,9 @@ export default function LoginPage() {
             <div className={styles.field}>
               <label htmlFor="password" className={styles.label}>
                 Password
-                <a href="#" className={styles.forgotLink}>Forgot?</a>
+                <a href="#" className={styles.forgotLink}>
+                  Forgot?
+                </a>
               </label>
               <input
                 id="password"
@@ -115,7 +137,14 @@ export default function LoginPage() {
 
             {errorMsg && (
               <div className={styles.errorBanner} role="alert">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  width="16"
+                  height="16"
+                >
                   <circle cx="12" cy="12" r="10" />
                   <line x1="12" y1="8" x2="12" y2="12" />
                   <line x1="12" y1="16" x2="12.01" y2="16" />

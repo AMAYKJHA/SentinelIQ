@@ -6,7 +6,6 @@ class VelocityResult:
     ip_count: int
     user_risk: float
     ip_risk: float
-    combined_risk: float
     flagged: bool
     
 @dataclass
@@ -16,7 +15,7 @@ class GeoLocation:
     lon: float
     city: str
     country: str
-    country_code: str
+    asn: str
 
 @dataclass
 class GeoResult:
@@ -27,3 +26,10 @@ class GeoResult:
     required_speed_kmh: float | None
     is_impossible_travel: bool
     risk: float
+
+@dataclass
+class EmailSchema:
+    to_email: str
+    subject: str
+    template_name: str
+    template_params: dict

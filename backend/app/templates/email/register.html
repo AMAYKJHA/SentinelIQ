@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Registration OTP</title>
+</head>
+
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+            <td align="center" style="padding:40px 20px;">
+
+                ```
+                <table width="600" cellpadding="0" cellspacing="0" border="0"
+                    style="background:#ffffff;border-radius:8px;padding:40px;">
+
+                    <tr>
+                        <td align="center">
+                            <h2 style="margin:0;color:#222;">Welcome to {{app_name}}</h2>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding-top:20px;color:#555;font-size:16px;">
+                            Hello {{name}},
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding-top:15px;color:#555;font-size:16px;">
+                            Thank you for registering. Please verify your email using the OTP below:
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td align="center" style="padding:30px 0;">
+                            <div style="font-size:32px;font-weight:bold;letter-spacing:6px;color:#111;">
+                                {{otp_code}}
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="color:#777;font-size:14px;">
+                            This OTP is valid for {{expiry_minutes}} minutes.
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding-top:25px;color:#999;font-size:13px;">
+                            If you did not create this account, you can ignore this email.
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+        ```
+
+    </table>
+</body>
+
+</html>

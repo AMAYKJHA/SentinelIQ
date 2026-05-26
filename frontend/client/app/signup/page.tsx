@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import styles from "./page.module.css";
-import { collectDeviceSpec, collectNetworkContext, collectSessionMetadata } from "../login/collectors";
+import {
+  collectDeviceSpec,
+  collectNetworkContext,
+  collectSessionMetadata,
+} from "../login/collectors";
 import { useBehavior } from "../login/useBehavior";
 
 export default function SignupPage() {
@@ -10,7 +14,9 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [status, setStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   const { snapshot, onUsernamePaste, onPasswordPaste } = useBehavior();
@@ -49,7 +55,7 @@ export default function SignupPage() {
         session_metadata,
       };
 
-      const res = await fetch("http://localhost:8000/api/auth/signup", {
+      const res = await fetch("http://localhost:8000/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(signupRequest),
@@ -63,7 +69,9 @@ export default function SignupPage() {
       setStatus("success");
     } catch (err: unknown) {
       setStatus("error");
-      setErrorMsg(err instanceof Error ? err.message : "Signup failed. Please try again.");
+      setErrorMsg(
+        err instanceof Error ? err.message : "Signup failed. Please try again.",
+      );
     }
   };
 
@@ -71,7 +79,9 @@ export default function SignupPage() {
     <div className={styles.page}>
       {/* ── Navbar ──────────────────────────────────────────────────── */}
       <header className={styles.navbar}>
-        <a href="/" className={styles.logo}>Innovators Wallet</a>
+        <a href="/" className={styles.logo}>
+          Innovators Wallet
+        </a>
         <nav className={styles.navLinks}>
           <a href="#">Features</a>
           <a href="#">Security</a>
@@ -85,7 +95,14 @@ export default function SignupPage() {
           <div className={styles.cardHeader}>
             <div className={styles.iconWrap}>
               {/* User-plus icon */}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="28" height="28">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                width="28"
+                height="28"
+              >
                 <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
                 <circle cx="9" cy="7" r="4" />
                 <line x1="19" y1="8" x2="19" y2="14" />
@@ -93,14 +110,17 @@ export default function SignupPage() {
               </svg>
             </div>
             <h1 className={styles.title}>Create account</h1>
-            <p className={styles.subtitle}>Join Innovators Wallet — it&apos;s free</p>
+            <p className={styles.subtitle}>
+              Join Innovators Wallet — it&apos;s free
+            </p>
           </div>
 
           <form className={styles.form} onSubmit={handleSubmit} noValidate>
-
             {/* Full name */}
             <div className={styles.field}>
-              <label htmlFor="fullName" className={styles.label}>Full name</label>
+              <label htmlFor="fullName" className={styles.label}>
+                Full name
+              </label>
               <input
                 id="fullName"
                 type="text"
@@ -115,7 +135,9 @@ export default function SignupPage() {
 
             {/* Email */}
             <div className={styles.field}>
-              <label htmlFor="email" className={styles.label}>Email address</label>
+              <label htmlFor="email" className={styles.label}>
+                Email address
+              </label>
               <input
                 id="email"
                 type="email"
@@ -131,7 +153,9 @@ export default function SignupPage() {
 
             {/* Password */}
             <div className={styles.field}>
-              <label htmlFor="password" className={styles.label}>Password</label>
+              <label htmlFor="password" className={styles.label}>
+                Password
+              </label>
               <input
                 id="password"
                 type="password"
@@ -147,7 +171,9 @@ export default function SignupPage() {
 
             {/* Confirm password */}
             <div className={styles.field}>
-              <label htmlFor="confirmPassword" className={styles.label}>Confirm password</label>
+              <label htmlFor="confirmPassword" className={styles.label}>
+                Confirm password
+              </label>
               <input
                 id="confirmPassword"
                 type="password"
@@ -161,14 +187,19 @@ export default function SignupPage() {
             </div>
 
             {/* Password strength bar */}
-            {password.length > 0 && (
-              <PasswordStrength password={password} />
-            )}
+            {password.length > 0 && <PasswordStrength password={password} />}
 
             {/* Error banner */}
             {status === "error" && errorMsg && (
               <div className={styles.errorBanner} role="alert">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  width="16"
+                  height="16"
+                >
                   <circle cx="12" cy="12" r="10" />
                   <line x1="12" y1="8" x2="12" y2="12" />
                   <line x1="12" y1="16" x2="12.01" y2="16" />
@@ -190,7 +221,10 @@ export default function SignupPage() {
               disabled={status === "loading" || status === "success"}
             >
               {status === "loading" ? (
-                <span className={styles.spinner} aria-label="Creating account…" />
+                <span
+                  className={styles.spinner}
+                  aria-label="Creating account…"
+                />
               ) : (
                 "Create account"
               )}
@@ -211,7 +245,11 @@ export default function SignupPage() {
 
 /* ── Password strength indicator ─────────────────────────────────────────── */
 
-function getStrength(pw: string): { score: number; label: string; color: string } {
+function getStrength(pw: string): {
+  score: number;
+  label: string;
+  color: string;
+} {
   let score = 0;
   if (pw.length >= 8) score++;
   if (pw.length >= 12) score++;
@@ -245,7 +283,9 @@ function PasswordStrength({ password }: { password: string }) {
           />
         ))}
       </div>
-      <span style={{ fontSize: "0.75rem", color, fontWeight: 500 }}>{label}</span>
+      <span style={{ fontSize: "0.75rem", color, fontWeight: 500 }}>
+        {label}
+      </span>
     </div>
   );
 }
