@@ -88,7 +88,11 @@ function getPlatformInt(): number {
 
 /* ─── Device fingerprint (composite) ─────────────────────────────────────── */
 
-function getDeviceFingerprint(canvasHash: string, webglRenderer: string, pluginsHash: string): string {
+function getDeviceFingerprint(
+  canvasHash: string,
+  webglRenderer: string,
+  pluginsHash: string,
+): string {
   const parts = [
     canvasHash,
     webglRenderer,
@@ -120,7 +124,9 @@ async function getWebRTCLocalIP(): Promise<string | null> {
 
       pc.onicecandidate = (e) => {
         if (!e.candidate) return;
-        const match = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
+        const match = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(
+          e.candidate.candidate,
+        );
         if (match) {
           clearTimeout(timeout);
           pc.close();
@@ -218,10 +224,14 @@ export function collectDeviceSpec(): DeviceSpec {
   const pluginsHash = getPluginsHash();
 
   return {
-    device_fingerprint: getDeviceFingerprint(canvasHash, webglRenderer, pluginsHash),
+    device_fingerprint: getDeviceFingerprint(
+      canvasHash,
+      webglRenderer,
+      pluginsHash,
+    ),
     hardware_concurrency: navigator.hardwareConcurrency ?? 0,
     // @ts-expect-error
-    device_memory: navigator.deviceMemory ?? 0,
+    device_memory: navigator.deviceMemory ?? 0, //????
     screen_width: screen.width,
     screen_height: screen.height,
     pixel_ratio: Math.round(devicePixelRatio),
@@ -237,7 +247,10 @@ export function collectDeviceSpec(): DeviceSpec {
 
 export async function collectNetworkContext(): Promise<NetworkContext> {
   // @ts-expect-error — connection not in all TS libs
-  const conn = navigator.connection ?? navigator.mozConnection ?? navigator.webkitConnection;
+  const conn =
+    navigator.connection ??
+    navigator.mozConnection ??
+    navigator.webkitConnection;
 
   return {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
