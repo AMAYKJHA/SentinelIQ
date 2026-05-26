@@ -1,8 +1,12 @@
-from typing import Annotated
+from fastapi import Depends, HTTPException, Cookie
 
-from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from redis.asyncio import Redis
 
+from app.db.session import SessionLocal
+from app.core.security import decode_token
+from app.db.models import User
 from app.core.config import settings
 
 _redis_client: Redis | None = None
@@ -29,3 +33,29 @@ async def close_redis():
     
 async def get_redis():
     yield get_redis_client()
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def is_authenticated(access_token: str | None = Cookie(default=None)):
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    payload = decode_token(access_token)
+    if not payload or payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return payload
+
+async def get_current_user(payload: dict = Depends(is_authenticated), db: AsyncSession = Depends(get_db)): 
+    stmt = select(User).where(User.uuid == payload.get("sub"))
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    
+    return user

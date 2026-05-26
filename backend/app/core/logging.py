@@ -9,3 +9,5 @@ def setup_logging():
         datefmt="%H:%M:%S"
     )
     logging.getLogger("watchfiles").setLevel(logging.ERROR)
+    logging.getLogger("httpx").setLevel(logging.ERROR)
+    logging.getLogger("httpcore").setLevel(logging.ERROR)

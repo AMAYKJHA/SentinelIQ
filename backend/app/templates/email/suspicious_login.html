@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Security Alert</title>
+</head>
+
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+            <td align="center" style="padding:40px 20px;">
+
+                ```
+                <table width="600" cellpadding="0" cellspacing="0" border="0"
+                    style="background:#ffffff;border-radius:8px;padding:40px;">
+
+                    <tr>
+                        <td align="center">
+                            <h2 style="margin:0;color:#c0392b;">Security Alert</h2>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding-top:20px;color:#555;font-size:16px;">
+                            Hello {{name}},
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding-top:15px;color:#555;font-size:16px;">
+                            We detected a login attempt to your account from a new location.
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding-top:25px;">
+
+                            <table width="100%" cellpadding="10" cellspacing="0" border="0"
+                                style="border:1px solid #e5e5e5;border-collapse:collapse;">
+                                <tr>
+                                    <td style="font-weight:bold;border-bottom:1px solid #e5e5e5;">Location</td>
+                                    <td style="border-bottom:1px solid #e5e5e5;">{{location}}</td>
+                                </tr>
+
+                                <tr>
+                                    <td style="font-weight:bold;border-bottom:1px solid #e5e5e5;">Device</td>
+                                    <td style="border-bottom:1px solid #e5e5e5;">{{device}}</td>
+                                </tr>
+
+                                <tr>
+                                    <td style="font-weight:bold;border-bottom:1px solid #e5e5e5;">IP Address</td>
+                                    <td style="border-bottom:1px solid #e5e5e5;">{{ip_address}}</td>
+                                </tr>
+
+                                <tr>
+                                    <td style="font-weight:bold;">Time</td>
+                                    <td>{{login_time}}</td>
+                                </tr>
+                            </table>
+
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding-top:25px;color:#555;font-size:16px;">
+                            If this was not you, please secure your account immediately.
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td align="center" style="padding-top:30px;">
+                            <a href="{{security_link}}"
+                                style="background:#c0392b;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:4px;display:inline-block;">
+                                Secure My Account
+                            </a>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+        ```
+
+    </table>
+</body>
+
+</html>
