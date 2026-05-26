@@ -10,7 +10,7 @@ export default function Home() {
           <a href="#">Features</a>
           <a href="#">Security</a>
           <a href="#">Pricing</a>
-          <a href="#" className={styles.loginBtn}>
+          <a href="/login" className={styles.loginBtn}>
             Login
           </a>
         </nav>
