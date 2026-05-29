@@ -1,5 +1,6 @@
 import Image from "next/image";
 import styles from "./page.module.css";
+import LogoutButton from "./LogoutButton";
 
 export default function DashboardPage() {
   return (
@@ -8,10 +9,10 @@ export default function DashboardPage() {
         <a href="/" className={styles.logoBlock}>
           <span className={styles.logoMark}>
             <Image
-              src="/icon.jpeg"
+              src="/image.png"
               alt="SentinelIQ Pay"
-              width={40}
-              height={40}
+              width={48}
+              height={48}
               priority
             />
           </span>
@@ -25,9 +26,7 @@ export default function DashboardPage() {
           <a href="#">Payments</a>
           <a href="#">Insights</a>
           <a href="#">Support</a>
-          <a href="/login" className={styles.ctaBtn}>
-            Log out
-          </a>
+          <LogoutButton className={styles.ctaBtn} />
         </nav>
       </header>
 
@@ -39,8 +38,8 @@ export default function DashboardPage() {
               Your balance is <span>Rs. 12,480.90</span>
             </h1>
             <p className={styles.subcopy}>
-              Payments are protected by SentinelIQ risk signals and always on fraud
-              monitoring.
+              Payments are protected by SentinelIQ risk signals and always on
+              fraud monitoring.
             </p>
             <div className={styles.actionRow}>
               <button className={styles.primaryBtn}>Send Money</button>

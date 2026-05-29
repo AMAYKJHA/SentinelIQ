@@ -73,17 +73,17 @@ function getPluginsHash(): string {
   }
 }
 
-/* ─── Platform int ───────────────────────────────────────────────────────── */
+/* ─── Platform label ─────────────────────────────────────────────────────── */
 
-function getPlatformInt(): number {
+function getPlatformLabel(): string {
   const p = navigator.platform?.toLowerCase() ?? "";
   const ua = navigator.userAgent.toLowerCase();
-  if (p.includes("win")) return 0;
-  if (p.includes("mac")) return 1;
-  if (p.includes("linux") && !ua.includes("android")) return 2;
-  if (ua.includes("android")) return 3;
-  if (/iphone|ipad|ipod/.test(ua)) return 4;
-  return 5;
+  if (p.includes("win")) return "windows";
+  if (p.includes("mac")) return "mac";
+  if (p.includes("linux") && !ua.includes("android")) return "linux";
+  if (ua.includes("android")) return "android";
+  if (/iphone|ipad|ipod/.test(ua)) return "ios";
+  return "other";
 }
 
 /* ─── Device fingerprint (composite) ─────────────────────────────────────── */
@@ -101,8 +101,7 @@ function getDeviceFingerprint(
     screen.height,
     screen.colorDepth,
     navigator.hardwareConcurrency,
-    // @ts-expect-error — deviceMemory is not in all TS lib versions
-    navigator.deviceMemory ?? 0,
+    (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0,
     navigator.platform,
   ].join("::");
   return djb2(parts);
@@ -186,17 +185,17 @@ function detectHeadlessSignals(): {
 export interface DeviceSpec {
   device_fingerprint: string;
   hardware_concurrency: number;
-  device_memory: number;
+  device_memory: number | null;
   screen_width: number;
   screen_height: number;
   pixel_ratio: number;
   is_touch: boolean;
-  platform: number;
+  platform: string;
   user_agent: string;
   color_depth: string;
-  plugins_hash: string;
-  canvas_hash: string;
-  webgl_renderer: string;
+  plugins_hash: string | null;
+  canvas_hash: string | null;
+  webgl_renderer: string | null;
 }
 
 export interface NetworkContext {
@@ -212,7 +211,6 @@ export interface SessionMetadata {
   session_id: string;
   referrer: string | null;
   cookies_enabled: boolean;
-  headless_signals: string;
   webdriver: boolean;
   chrome_headless: boolean;
   no_plugins: boolean;
@@ -230,13 +228,13 @@ export function collectDeviceSpec(): DeviceSpec {
       pluginsHash,
     ),
     hardware_concurrency: navigator.hardwareConcurrency ?? 0,
-    // @ts-expect-error
-    device_memory: navigator.deviceMemory ?? 0, //????
+    device_memory:
+      (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? null,
     screen_width: screen.width,
     screen_height: screen.height,
-    pixel_ratio: Math.round(devicePixelRatio),
+    pixel_ratio: devicePixelRatio,
     is_touch: navigator.maxTouchPoints > 0,
-    platform: getPlatformInt(),
+    platform: getPlatformLabel(),
     user_agent: navigator.userAgent,
     color_depth: String(screen.colorDepth),
     plugins_hash: pluginsHash,
@@ -245,12 +243,19 @@ export function collectDeviceSpec(): DeviceSpec {
   };
 }
 
+interface NetConnection {
+  effectiveType?: string;
+  type?: string;
+}
+type NavigatorWithConn = Navigator & {
+  connection?: NetConnection;
+  mozConnection?: NetConnection;
+  webkitConnection?: NetConnection;
+};
+
 export async function collectNetworkContext(): Promise<NetworkContext> {
-  // @ts-expect-error — connection not in all TS libs
-  const conn =
-    navigator.connection ??
-    navigator.mozConnection ??
-    navigator.webkitConnection;
+  const nav = navigator as NavigatorWithConn;
+  const conn = nav.connection ?? nav.mozConnection ?? nav.webkitConnection;
 
   return {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -263,11 +268,13 @@ export async function collectNetworkContext(): Promise<NetworkContext> {
 }
 
 export function collectSessionMetadata(): SessionMetadata {
-  const headless = detectHeadlessSignals();
+  const { webdriver, chrome_headless, no_plugins } = detectHeadlessSignals();
   return {
     session_id: crypto.randomUUID(),
     referrer: document.referrer || null,
     cookies_enabled: navigator.cookieEnabled,
-    ...headless,
+    webdriver,
+    chrome_headless,
+    no_plugins,
   };
 }

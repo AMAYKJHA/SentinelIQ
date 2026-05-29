@@ -1,13 +1,17 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 
 @dataclass
 class VelocityResult:
     user_count: int
     ip_count: int
+    user_ip_count: int
     user_risk: float
     ip_risk: float
+    user_ip_risk: float
     flagged: bool
-    
+
+
 @dataclass
 class GeoLocation:
     ip: str
@@ -16,6 +20,9 @@ class GeoLocation:
     city: str
     country: str
     asn: str
+    is_proxy: bool = False
+    is_hosting: bool = False
+
 
 @dataclass
 class GeoResult:
@@ -25,11 +32,16 @@ class GeoResult:
     time_elapsed_seconds: float | None
     required_speed_kmh: float | None
     is_impossible_travel: bool
-    risk: float
+    is_new_country: bool = False
+    is_outside_home_cluster: bool = False
+    is_datacenter: bool = False
+    is_proxy: bool = False
+    risk: float = 0.0
+
 
 @dataclass
 class EmailSchema:
     to_email: str
     subject: str
-    template_name: str
-    template_params: dict
+    template_name: str          # e.g. "mfa.html", "register.html"
+    template_params: dict = field(default_factory=dict)
