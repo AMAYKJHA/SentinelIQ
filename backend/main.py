@@ -41,7 +41,7 @@ def home():
             <title>Authentication Anomaly Detection</title>
         </head>
         <body style="font-family:Arial;text-align:center;margin-top:100px;">
-            <h1 style="color:008000;">Authentication Anomaly Detection</h1>
+            <h1 style="color:#008000;">Authentication Anomaly Detection</h1>
             <p style="color:#32cd32;">Detect anomaly during authentication and prevent financial frauds.</p>
             <div>
                 <a href="/docs"><button>API Docs</button></a>

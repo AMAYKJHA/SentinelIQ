@@ -1,7 +1,5 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -10,7 +8,6 @@ from app.core.config import settings
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.ALGORITHM
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 def hash_password(raw_password: str) -> str:
     return pwd_context.hash(raw_password)
@@ -18,9 +15,11 @@ def hash_password(raw_password: str) -> str:
 def verify_password(raw_password, hash) -> bool:
     return pwd_context.verify(raw_password, hash)
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, sid: int | None = None) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": subject, "exp": expire, "type": "access"}
+    payload: dict = {"sub": subject, "exp": expire, "type": "access"}
+    if sid is not None:
+        payload["sid"] = sid
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 def create_refresh_token(subject: str) -> str:
@@ -34,9 +33,4 @@ def decode_token(token: str) -> dict | None:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
-    
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    return payload
+

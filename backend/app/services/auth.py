@@ -1,71 +1,51 @@
-import uuid
-from datetime import datetime, timezone
+"""Authentication flow with risk-based adaptive MFA.
+
+Decision pipeline:
+    1. Always-on signals: behavioral bot detector, velocity (per IP).
+    2. Look up user (no early-return on missing email — constant-time).
+    3. Verify password (against real hash, or dummy hash if user is None).
+    4. If credentials are wrong: record failure + progressive delay + alert at threshold.
+    5. If credentials are right: run geo + device + behavioral-baseline in parallel.
+    6. Compute final risk → decide ALLOW / STEP_UP / BLOCK.
+        - ALLOW   → issue session
+        - STEP_UP → store pending challenge in Redis, email OTP, return challenge_id
+        - BLOCK   → email "was it you" magic link, refuse login
+    7. /auth/mfa/verify consumes the challenge and (optionally) trusts the device.
+    8. /auth/security/{yes,no} consume magic link tokens.
+"""
 import asyncio
 import logging
+import uuid as uuid_lib
+from datetime import datetime, timezone
+
+from fastapi import HTTPException, Request, Response
 from redis.asyncio import Redis
-from fastapi import Request, Response, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select   
+from sqlalchemy import select
+from sqlalchemy.orm import Session as DbSession
 
 from app.core.config import settings
-from app.schemas.auth import LoginRequest, RegisterRequest
-from app.schemas.dto import EmailSchema
-from app.db.models import User, LoginEvent
-from app.services.email import send_email
-from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token
-
-from app.detection.velocity import check_velocity, record_attempt
+from app.core.security import hash_password, verify_password
+from app.db.models import LoginEvent, LoginOutcome, User, UserDevice
+from app.deps import get_client_ip
+from app.detection.aggregate import RiskDecision, build_breakdown
+from app.detection.behavioral import check_behavioral, get_profile, update_baseline
+from app.detection.device import (
+    check_device, increment_device_login, mark_device_trusted, revoke_all_device_trust,
+)
 from app.detection.geo import check_geo
-from app.detection.device import check_device
-from app.detection.behavioral import check_behavioral
-from app.detection.aggregate import compute_rule_based_risk, compute_final_risk
-
+from app.detection.velocity import check_velocity, record_attempt
+from app.schemas.auth import LoginRequest, MfaVerifyRequest, RegisterRequest, RegisterVerifyRequest
+from app.services import mfa as mfa_svc
+from app.services import notifications, otp as otp_svc, sessions as session_svc
 
 logger = logging.getLogger(__name__)
 
-def _issue_tokens(user: User) -> dict:
-    subject = str(user.uuid)
-    return {
-        "access_token": create_access_token(subject),
-        "refresh_token": create_refresh_token(subject),
-        "token_type": "bearer"
-    }
-
-def _set_auth_cookies(response: Response, access_token: str, refresh_token: str):
-    response.set_cookie(
-        key="access_token",
-        value=access_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        path="/",
-    )
-    
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
-        path="/auth/refresh",
-    )
-
-
-# def get_lockout_response(failed_count: int) -> tuple[int, str] | None:
-#     """Returns (delay_seconds, message) or None if no lockout."""
-#     if failed_count < 3:
-#         return None                          # no friction
-#     if failed_count < 5:
-#         return (5, "Too many attempts, wait 5 seconds")
-#     if failed_count < 10:
-#         return (30, "Too many attempts, wait 30 seconds")
-#     return (300, "Account temporarily restricted")
+# Pre-computed Argon2 hash for a value no one will ever type. Used to keep
+# verify_password timing constant when the email doesn't exist.
+_DUMMY_PASSWORD_HASH = hash_password("__dummy_password_for_timing__")
 
 
 def _progressive_delay(failed_count: int) -> int:
-    """Returns seconds to sleep before responding. Slows brute force."""
     if failed_count < 3:
         return 0
     if failed_count < 5:
@@ -74,141 +54,478 @@ def _progressive_delay(failed_count: int) -> int:
         return 10
     return 30
 
-async def _send_security_alert(email: str, subject:str, template_name:str, ip: str, attempt_count: int) -> None:
-    context = {"ip": ip, "attempt_count": attempt_count}
-    email_schema = EmailSchema(to_email=email, subject=subject, template_name=template_name, template_params=context)
-    result = await send_email(
-        email_schema
-    )
 
-async def auth_flow(
+def _device_label(device_spec) -> str:
+    ua = device_spec.user_agent or ""
+    return ua[:80] if ua else "Unknown device"
+
+
+async def _send_register_otp_bg(email: str, name: str, otp: str) -> None:
+    try:
+        await notifications.send_register_otp(email, name, otp)
+    except Exception:
+        logger.exception("register OTP send failed")
+
+
+async def _send_mfa_otp_bg(email: str, name: str, otp: str) -> None:
+    try:
+        await notifications.send_mfa_otp(email, name, otp)
+    except Exception:
+        logger.exception("MFA OTP send failed")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGISTER
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def register_flow(
+    request: Request,
+    register_request: RegisterRequest,
+    db: DbSession,
+    redis: Redis,
+) -> dict:
+    email = register_request.credentials.email
+    existing = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if existing and existing.is_active:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Reuse the row if a previous registration didn't complete verification
+    if existing:
+        existing.hashed_password = hash_password(register_request.credentials.password)
+        existing.full_name = register_request.credentials.full_name
+        user = existing
+    else:
+        user = User(
+            uuid=uuid_lib.uuid4(),
+            email=email,
+            hashed_password=hash_password(register_request.credentials.password),
+            full_name=register_request.credentials.full_name,
+            is_active=False,
+            is_verified=False,
+        )
+        db.add(user)
+    db.commit()
+
+    otp = await otp_svc.issue_otp(redis, purpose="register", subject=email)
+    asyncio.create_task(_send_register_otp_bg(email, user.full_name or "", otp))
+
+    return {
+        "status": "otp_sent",
+        "email": email,
+        "expires_in": settings.OTP_TTL_SECONDS,
+    }
+
+
+async def register_verify_flow(
+    request: Request,
+    response: Response,
+    payload: RegisterVerifyRequest,
+    db: DbSession,
+    redis: Redis,
+) -> dict:
+    ok, reason = await otp_svc.verify_otp(redis, "register", payload.email, payload.otp)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"OTP {reason}")
+
+    user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_active = True
+    user.is_verified = True
+    db.commit()
+
+    ip = get_client_ip(request)
+    ua = request.headers.get("user-agent", "")
+    _, access, refresh = session_svc.create_session(db, user, device_id=None, ip=ip, user_agent=ua)
+    db.commit()
+    session_svc.set_auth_cookies(response, access, refresh)
+
+    return {
+        "status": "ok",
+        "uuid": str(user.uuid),
+        "email": user.email,
+        "full_name": user.full_name,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGIN
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def login_flow(
     request: Request,
     response: Response,
     login_request: LoginRequest,
-    db: AsyncSession,
-    redis: Redis
-):
+    db: DbSession,
+    redis: Redis,
+) -> dict:
     email = login_request.credentials.email
     password = login_request.credentials.password
-    ip = request.client.host
+    ip = get_client_ip(request)
 
-    behavioral = check_behavioral(login_request.behavioral_signals) 
-    if behavioral.is_likely_bot:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    # ── Pre-user-lookup velocity (catches credential-stuffers hammering one IP) ──
+    pre_velocity = await check_velocity(user_id=None, ip=ip, redis=redis)
+    if pre_velocity.ip_risk > 0.8:
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
 
-    user = (
-        db.execute(select(User).where(User.email == email))
-    ).scalar_one_or_none()
- 
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+
+    # Timing-side-channel protection: always run verify_password against SOMETHING.
+    real_password_ok = verify_password(
+        password,
+        user.hashed_password if user else _DUMMY_PASSWORD_HASH,
+    )
+
     if user is None:
         await record_attempt(user_id=None, ip=ip, redis=redis)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not user.is_verified:
+        await record_attempt(user.id, ip, redis)
+        raise HTTPException(status_code=403, detail="Email not verified")
 
     if not user.is_active:
         await record_attempt(user.id, ip, redis)
         raise HTTPException(status_code=403, detail="Account disabled")
 
+    # Per-user / per-(user,ip) velocity check
     vel_res = await check_velocity(user_id=user.id, ip=ip, redis=redis)
- 
     if vel_res.flagged:
         db.add(LoginEvent(
-            user_id=user.id,
-            ip_address=ip,
-            outcome="blocked_velocity",
+            user_id=user.id, ip_address=ip,
+            outcome=LoginOutcome.blocked_velocity,
             device_fingerprint=login_request.device_spec.device_fingerprint,
             risk_score=1.0,
         ))
         db.commit()
         raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
 
-    
-    if not verify_password(password, user.hashed_password):
-        await record_attempt(user_id=user.id, ip=ip, redis=redis)
+    # Run behavioral bot check AFTER user is confirmed (so a stuck JS sensor on
+    # a legit user produces a clean 401 instead of leaking "this account exists").
+    profile = get_profile(db, user.id)
+    behavioral = check_behavioral(login_request.behavioral_signals, profile=profile)
 
-        user.failed_login_count += 1
- 
-        # notify user on threshold — don't lock them out
-        if user.failed_login_count == 5:
-            # asyncio.create_task(
-            #     _send_security_alert(user.email, ip, user.failed_login_count)
-            # )
-            logger.debug("Sending security alert to %s: failed_count:%s", user.email, user.failed_login_count)
-            
- 
+    if not real_password_ok:
+        await record_attempt(user_id=user.id, ip=ip, redis=redis)
+        user.failed_login_count = (user.failed_login_count or 0) + 1
         db.add(LoginEvent(
-            user_id=user.id,
-            ip_address=ip,
-            outcome="failed_credentials",
+            user_id=user.id, ip_address=ip,
+            outcome=LoginOutcome.failed_credentials,
             device_fingerprint=login_request.device_spec.device_fingerprint,
         ))
         db.commit()
- 
-        # progressive delay — makes brute force painfully slow
+
+        if user.failed_login_count == 5:
+            logger.info("threshold failed-logins for %s ip=%s", user.email, ip)
+
         delay = _progressive_delay(user.failed_login_count)
         if delay:
             await asyncio.sleep(delay)
- 
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # ── 5. Correct password — run full signal pipeline ────────────────────────
-    user.failed_login_count = 0  # reset on success
-    _, geo_res, device_res = await asyncio.gather(
+    # ── Password OK — run the full pipeline ─────────────────────────────────
+    user.failed_login_count = 0
+
+    # Bot signals after correct password still matter: a bot that bought creds
+    # off a dump should still trigger MFA.
+    _, geo_res = await asyncio.gather(
         record_attempt(user_id=user.id, ip=ip, redis=redis),
-        check_geo(user_id=user.id, ip=ip, redis=redis),
-        check_device(
-            user_id=user.id,
-            device=login_request.device_spec,
-            session=login_request.session_metadata,
-            db=db,
-        ),
+        check_geo(user_id=user.id, ip=ip, redis=redis, store=False),
     )
 
-    rule_based_risk = compute_rule_based_risk(vel_res, geo_res, device_res, behavioral)
-    final_risk = compute_final_risk(rule_based_risk)
-    logger.debug("final risk: %s", final_risk)
-    # ── Suspicious
-    # 7.1
-    # MFA/Block (send email)
-    
+    city = geo_res.current_location.city if geo_res.current_location else None
+    country = geo_res.current_location.country if geo_res.current_location else None
+    lat = geo_res.current_location.lat if geo_res.current_location else None
+    lon = geo_res.current_location.lon if geo_res.current_location else None
 
-    # ── Request found to be genuine
-    # ── 7.2 Update user state + persist event ──
+    device_res = check_device(
+        user_id=user.id,
+        device=login_request.device_spec,
+        session=login_request.session_metadata,
+        db=db,
+        ip=ip, city=city, country=country,
+    )
+
+    breakdown = build_breakdown(vel_res, geo_res, device_res, behavioral)
+    logger.info(
+        "login risk user=%s decision=%s final=%.3f bd=%s",
+        user.email, breakdown.decision.value, breakdown.final,
+        {"v": breakdown.velocity, "g": breakdown.geo, "d": breakdown.device, "b": breakdown.behavioral},
+    )
+
+    # ── BLOCK ──────────────────────────────────────────────────────────────
+    if breakdown.decision is RiskDecision.BLOCK:
+        event = LoginEvent(
+            user_id=user.id, ip_address=ip, city=city, country=country,
+            outcome=LoginOutcome.blocked_risk,
+            device_fingerprint=login_request.device_spec.device_fingerprint,
+            risk_score=breakdown.final,
+        )
+        db.add(event)
+        db.commit()
+
+        yes_token = await mfa_svc.create_magic_link(redis, {
+            "kind": "yes", "user_id": user.id, "device_id": device_res.device_id, "ip": ip,
+        })
+        no_token = await mfa_svc.create_magic_link(redis, {
+            "kind": "no", "user_id": user.id,
+        })
+        notifications.notify_suspicious_login(
+            email=user.email, name=user.full_name or "",
+            ip=ip, city=city or "", country=country or "",
+            device=_device_label(login_request.device_spec),
+            yes_token=yes_token, no_token=no_token,
+            lat=lat, lon=lon,
+        )
+        raise HTTPException(status_code=403, detail={
+            "code": "blocked_high_risk",
+            "message": "Sign-in blocked. Check your email to confirm it was you.",
+        })
+
+    # ── STEP-UP MFA ────────────────────────────────────────────────────────
+    if breakdown.decision is RiskDecision.STEP_UP:
+        db.add(LoginEvent(
+            user_id=user.id, ip_address=ip, city=city, country=country,
+            outcome=LoginOutcome.mfa_required,
+            device_fingerprint=login_request.device_spec.device_fingerprint,
+            risk_score=breakdown.final,
+        ))
+        db.commit()
+
+        challenge_id = await mfa_svc.create_challenge(redis, {
+            "user_id": user.id,
+            "device_id": device_res.device_id,
+            "ip": ip,
+            "user_agent": request.headers.get("user-agent", ""),
+            "city": city, "country": country,
+            "lat": lat, "lon": lon,
+            "risk": breakdown.final,
+            "device_fingerprint": login_request.device_spec.device_fingerprint,
+            "device_label": _device_label(login_request.device_spec),
+            "is_new_device": not device_res.is_known_device,
+        })
+        otp = await otp_svc.issue_otp(redis, purpose="mfa", subject=challenge_id)
+        asyncio.create_task(_send_mfa_otp_bg(user.email, user.full_name or "", otp))
+
+        return {
+            "status": "mfa_required",
+            "challenge_id": challenge_id,
+            "expires_in": settings.OTP_TTL_SECONDS,
+            "risk": breakdown.final,
+        }
+
+    # ── ALLOW ──────────────────────────────────────────────────────────────
+    await _finalize_login(
+        request=request, response=response, db=db, user=user,
+        device_id=device_res.device_id,
+        ip=ip, city=city, country=country, lat=lat, lon=lon,
+        device_fingerprint=login_request.device_spec.device_fingerprint,
+        device_label=_device_label(login_request.device_spec),
+        is_new_device=not device_res.is_known_device,
+        behavioral_signals=login_request.behavioral_signals,
+        risk_score=breakdown.final,
+        outcome=LoginOutcome.success,
+        redis=redis,
+    )
+
+    return {
+        "status": "ok",
+        "uuid": str(user.uuid),
+        "email": user.email,
+        "risk": breakdown.final,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MFA VERIFY
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def mfa_verify_flow(
+    request: Request,
+    response: Response,
+    payload: MfaVerifyRequest,
+    db: DbSession,
+    redis: Redis,
+) -> dict:
+    challenge = await mfa_svc.load_challenge(redis, payload.challenge_id)
+    if not challenge:
+        raise HTTPException(status_code=400, detail="Challenge expired or invalid")
+
+    ok, reason = await otp_svc.verify_otp(redis, "mfa", payload.challenge_id, payload.otp)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"OTP {reason}")
+
+    await mfa_svc.consume_challenge(redis, payload.challenge_id)
+
+    user = db.get(User, challenge["user_id"])
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    device_id = challenge.get("device_id")
+    if payload.remember_device and device_id:
+        mark_device_trusted(db, device_id)
+
+    # Build a minimal BehavioralSignals-shaped payload from the challenge? We
+    # don't have it here — that's fine, baseline update happens only on full
+    # login. MFA verify just promotes the session.
+
+    ip = challenge.get("ip") or get_client_ip(request)
+    city = challenge.get("city")
+    country = challenge.get("country")
+
+    # Record success event
+    db.add(LoginEvent(
+        user_id=user.id, ip_address=ip, city=city, country=country,
+        outcome=LoginOutcome.mfa_verified,
+        device_fingerprint=challenge.get("device_fingerprint"),
+        risk_score=challenge.get("risk"),
+    ))
+    user.last_login_at = datetime.now(timezone.utc)
+    if device_id:
+        increment_device_login(db, device_id)
+
+    # Persist geo as last-known (now that we know it was really the user)
+    await check_geo(user_id=user.id, ip=ip, redis=redis, store=True)
+
+    _, access, refresh = session_svc.create_session(
+        db, user, device_id=device_id, ip=ip,
+        user_agent=challenge.get("user_agent"),
+    )
+    db.commit()
+    session_svc.set_auth_cookies(response, access, refresh)
+
+    if challenge.get("is_new_device"):
+        wasnt_me = await mfa_svc.create_magic_link(redis, {
+            "kind": "no", "user_id": user.id,
+        })
+        notifications.notify_new_device(
+            email=user.email, name=user.full_name or "",
+            ip=ip, city=city or "", country=country or "",
+            device=challenge.get("device_label", "Unknown"),
+            wasnt_me_token=wasnt_me,
+            lat=challenge.get("lat"), lon=challenge.get("lon"),
+        )
+
+    return {
+        "status": "ok",
+        "uuid": str(user.uuid),
+        "email": user.email,
+        "device_trusted": bool(payload.remember_device and device_id),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAGIC LINKS (was it you? / no it wasn't)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def confirm_was_me_flow(token: str, db: DbSession, redis: Redis) -> dict:
+    payload = await mfa_svc.consume_magic_link(redis, token)
+    if not payload or payload.get("kind") != "yes":
+        raise HTTPException(status_code=400, detail="Invalid or expired link")
+
+    device_id = payload.get("device_id")
+    if device_id:
+        mark_device_trusted(db, device_id)
+        db.commit()
+    return {"status": "ok", "message": "Thanks — this device is now trusted."}
+
+
+async def deny_was_me_flow(token: str, db: DbSession, redis: Redis) -> dict:
+    payload = await mfa_svc.consume_magic_link(redis, token)
+    if not payload or payload.get("kind") != "no":
+        raise HTTPException(status_code=400, detail="Invalid or expired link")
+
+    user_id = payload["user_id"]
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    revoke_all_device_trust(db, user_id)
+    revoked = session_svc.revoke_all_user_sessions(db, user_id)
+    db.commit()
+
+    return {
+        "status": "ok",
+        "message": "All sessions revoked. Please reset your password.",
+        "sessions_revoked": revoked,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REFRESH / LOGOUT
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def refresh_flow(
+    request: Request, response: Response, db: DbSession,
+) -> dict:
+    refresh = request.cookies.get("refresh_token")
+    if not refresh:
+        raise HTTPException(status_code=401, detail="Missing refresh token")
+
+    s = session_svc.find_session_by_refresh(db, refresh)
+    if not session_svc.is_session_valid(s):
+        raise HTTPException(status_code=401, detail="Session expired")
+
+    new_refresh = session_svc.rotate_session(db, s)
+    db.commit()
+
+    from app.core.security import create_access_token
+    user = db.get(User, s.user_id)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User inactive")
+    access = create_access_token(str(user.uuid), sid=s.id)
+    session_svc.set_auth_cookies(response, access, new_refresh)
+    return {"status": "ok"}
+
+
+async def logout_flow(request: Request, response: Response, db: DbSession) -> dict:
+    refresh = request.cookies.get("refresh_token")
+    if refresh:
+        s = session_svc.find_session_by_refresh(db, refresh)
+        if s:
+            session_svc.revoke_session(db, s)
+            db.commit()
+    session_svc.clear_auth_cookies(response)
+    return {"status": "ok"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal: finalize a successful (no-MFA) login
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _finalize_login(
+    *, request: Request, response: Response, db: DbSession, user: User,
+    device_id: int | None, ip: str, city: str | None, country: str | None,
+    lat: float | None, lon: float | None,
+    device_fingerprint: str, device_label: str, is_new_device: bool,
+    behavioral_signals, risk_score: float, outcome: LoginOutcome, redis: Redis,
+) -> None:
     user.last_login_at = datetime.now(timezone.utc)
     db.add(LoginEvent(
-        user_id=user.id,
-        ip_address=ip,
-        outcome="success",
-        device_fingerprint=login_request.device_spec.device_fingerprint,
-        risk_score=final_risk,
+        user_id=user.id, ip_address=ip, city=city, country=country,
+        outcome=outcome, device_fingerprint=device_fingerprint,
+        risk_score=risk_score,
     ))
-    db.commit()
+    if device_id:
+        increment_device_login(db, device_id)
+    update_baseline(db, user.id, behavioral_signals, ip=ip)
+    await check_geo(user_id=user.id, ip=ip, redis=redis, store=True)
 
-    tokens = _issue_tokens(user)
-    access_token = tokens.get("access_token")
-    refresh_token = tokens.get("refresh_token")
-    # _set_auth_cookies(response, access_token, refresh_token)
-
-    return {"message": "Login successful"}
-
-
-async def register_flow(response: Response, register_request: RegisterRequest, db: AsyncSession, redis: Redis):
-    email = register_request.credentials.email
-    user = db.query(User).filter(User.email == email).first()
-    if user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    user = User(
-        uuid=uuid.uuid4(),
-        email=email,
-        hashed_password=hash_password(register_request.credentials.password),
-        full_name=register_request.credentials.full_name,
+    _, access, refresh = session_svc.create_session(
+        db, user, device_id=device_id, ip=ip,
+        user_agent=request.headers.get("user-agent", ""),
     )
-    
-    db.add(user)
     db.commit()
-    db.refresh(user)
-    
-    tokens = _issue_tokens(user)    
-    _set_auth_cookies(response, tokens.get("access_token", ""), tokens.get("refresh_token"))
-    
-    return {"success": True, "uuid": user.uuid, "email": user.email, "full_name": user.full_name, "is_active": True}
+    session_svc.set_auth_cookies(response, access, refresh)
+
+    if is_new_device:
+        wasnt_me = await mfa_svc.create_magic_link(redis, {
+            "kind": "no", "user_id": user.id,
+        })
+        notifications.notify_new_device(
+            email=user.email, name=user.full_name or "",
+            ip=ip, city=city or "", country=country or "",
+            device=device_label, wasnt_me_token=wasnt_me,
+            lat=lat, lon=lon,
+        )
