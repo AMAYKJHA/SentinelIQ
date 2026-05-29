@@ -1,3 +1,4 @@
+import Link from "next/link";
 import styles from "./page.module.css";
 
 export default function AdminHome() {
@@ -33,7 +34,9 @@ export default function AdminHome() {
           </p>
 
           <div className={styles.actions}>
-            <button className={styles.primaryBtn}>Open Dashboard</button>
+            <Link href="/dashboard" className={styles.primaryBtn}>
+              Open Dashboard
+            </Link>
 
             <button className={styles.secondaryBtn}>View Reports</button>
           </div>

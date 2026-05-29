@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import styles from "./page.module.css";
 import {
   collectDeviceSpec,
@@ -79,13 +80,29 @@ export default function SignupPage() {
     <div className={styles.page}>
       {/* ── Navbar ──────────────────────────────────────────────────── */}
       <header className={styles.navbar}>
-        <a href="/" className={styles.logo}>
-          Innovators Wallet
+        <a href="/" className={styles.logoBlock}>
+          <span className={styles.logoMark}>
+            <Image
+              src="/icon.jpeg"
+              alt="SentinelIQ Pay"
+              width={40}
+              height={40}
+              priority
+            />
+          </span>
+          <span className={styles.brandCopy}>
+            <span className={styles.brandName}>SentinelIQ Pay</span>
+            <span className={styles.brandTag}>Trusted digital wallet</span>
+          </span>
         </a>
         <nav className={styles.navLinks}>
-          <a href="#">Features</a>
-          <a href="#">Security</a>
-          <a href="#">Pricing</a>
+          <a href="#">Scan & Pay</a>
+          <a href="#">Send Money</a>
+          <a href="#">Offers</a>
+          <a href="#">Support</a>
+          <a href="/login" className={styles.ctaBtn}>
+            Login
+          </a>
         </nav>
       </header>
 
@@ -111,7 +128,7 @@ export default function SignupPage() {
             </div>
             <h1 className={styles.title}>Create account</h1>
             <p className={styles.subtitle}>
-              Join Innovators Wallet — it&apos;s free
+              Join SentinelIQ Pay — it&apos;s free
             </p>
           </div>
 

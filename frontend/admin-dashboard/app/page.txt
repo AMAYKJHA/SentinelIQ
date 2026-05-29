@@ -1,0 +1,530 @@
+import { useState, useEffect, useCallback } from "react";
+
+// ── Exact colors from screenshot ──
+const C = {
+  bgMain:     "#081624",
+  bgCard:     "#0d1e30",
+  bgNav:      "#0a1a2e",
+  borderCard: "#1e3a52",
+  borderSub:  "#162d44",
+  teal:       "#2dd4bf",
+  orange:     "#f97316",
+  red:        "#ef4444",
+  green:      "#4ade80",
+  textMuted:  "#4a6a85",
+  textDim:    "#2a4a65",
+  textLabel:  "#5a7a95",
+  textWhite:  "#e2eaf2",
+  attackLabel:"#f97316",
+};
+
+const FEATURE_IMPORTANCE = [
+  { name: "geo_time_risk",            value: 4.90 },
+  { name: "impossible_travel",        value: 3.72 },
+  { name: "hour_sin",                 value: 2.18 },
+  { name: "login_velocity_1h",        value: 1.94 },
+  { name: "ip_reputation",            value: 1.61 },
+  { name: "device_fingerprint_match", value: 1.33 },
+  { name: "country_risk_score",       value: 1.12 },
+  { name: "vpn_detected",             value: 0.87 },
+  { name: "user_agent_anomaly",       value: 0.64 },
+  { name: "time_since_last_login",    value: 0.41 },
+];
+const MAX_FEAT = 4.9;
+
+const FEAT_COLOR = (v) =>
+  v >= 3.5 ? C.red : v >= 2 ? C.orange : v >= 1 ? "#eab308" : C.teal;
+
+const ATTACKS = {
+  impossible_travel: {
+    label:"Impossible Travel", icon:"🌍",
+    user:"ana.reyes@corp.io", ip:"196.12.44.201",
+    location:"Lagos, NG → Denver, US", device:"Chrome/Win",
+    riskScore:0.94, tier:"Tier 4", action:"HARD BLOCK",
+    actionColor:C.red, borderColor:C.red,
+    explanation:"User authenticated from Lagos 22 mins ago; new login from Denver (9,200 km apart) is physically impossible. geo_time_risk and impossible_travel fired simultaneously.",
+  },
+  credential_stuffing: {
+    label:"Credential Stuffing", icon:"🤖",
+    user:"bot_sweep_447@—", ip:"185.220.101.47",
+    location:"Tor Exit / NL", device:"curl/7.88",
+    riskScore:0.89, tier:"Tier 3", action:"LOCK",
+    actionColor:C.orange, borderColor:C.orange,
+    explanation:"34 failed attempts across 12 accounts in 60 s from a single IP. High login_velocity_1h + ip_reputation (known Tor exit) + user_agent_anomaly triggered automated lockout.",
+  },
+  night_vpn: {
+    label:"Night + VPN", icon:"🌙",
+    user:"james.ortiz@corp.io", ip:"45.142.212.100",
+    location:"Amsterdam, NL (VPN)", device:"Firefox/Linux",
+    riskScore:0.71, tier:"Tier 2", action:"MFA REQUIRED",
+    actionColor:"#facc15", borderColor:"#ca8a04",
+    explanation:"Login at 02:14 local time via commercial VPN. vpn_detected + hour_sin (off-hours) raised risk above MFA threshold. Device fingerprint matches — not blocked.",
+  },
+  near_border_ip: {
+    label:"Near-Border IP", icon:"📍",
+    user:"priya.nair@corp.io", ip:"103.87.5.22",
+    location:"Birgunj, NP ↔ IN", device:"Safari/iOS",
+    riskScore:0.58, tier:"Tier 2", action:"MFA REQUIRED",
+    actionColor:"#facc15", borderColor:"#ca8a04",
+    explanation:"IP resolves to Nepal/India border zone — ambiguous jurisdiction increases country_risk_score. Combined with first login from this device, MFA step-up applied.",
+  },
+};
+
+const NORMAL_USERS = [
+  { user:"lena.hoffmann@corp.io",   ip:"10.0.4.22",     location:"Berlin, DE",   device:"Chrome/Mac" },
+  { user:"carlos.medina@corp.io",   ip:"172.16.8.5",    location:"Bogotá, CO",   device:"Edge/Win" },
+  { user:"yuki.tanaka@corp.io",     ip:"203.0.113.14",  location:"Tokyo, JP",    device:"Safari/Mac" },
+  { user:"amara.diallo@corp.io",    ip:"41.63.0.101",   location:"Dakar, SN",    device:"Chrome/Android" },
+  { user:"tom.baker@corp.io",       ip:"192.168.1.45",  location:"London, GB",   device:"Firefox/Win" },
+  { user:"sofia.russo@corp.io",     ip:"151.38.9.77",   location:"Milan, IT",    device:"Chrome/Mac" },
+];
+
+function randomNormalLogin() {
+  const u = NORMAL_USERS[Math.floor(Math.random() * NORMAL_USERS.length)];
+  return {
+    id: crypto.randomUUID(), time: new Date(), ...u,
+    riskScore: +(Math.random() * 0.18 + 0.01).toFixed(2),
+    tier:"Tier 1", action:"ALLOW",
+    actionColor: C.green, borderColor: "#166534",
+    explanation:"Login matches known device fingerprint, typical work-hours pattern, and home-country IP. All risk features within normal baseline.",
+  };
+}
+
+function fmtNum(n) { return n.toLocaleString(); }
+function fmtTime(d) { return d.toTimeString().slice(0,8); }
+
+// ── SHAP Sidebar ──
+function ShapPanel({ row, onClose, onAction }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setTimeout(() => setMounted(true), 20); }, []);
+
+  const feats = FEATURE_IMPORTANCE.slice(0,5).map(f => ({
+    ...f, value: +(f.value * (row.riskScore / 0.9 + 0.08)).toFixed(2),
+  }));
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:40 }}
+      />
+      <div style={{
+        position:"fixed", top:0, right:0, bottom:0, width:300, zIndex:50,
+        background: C.bgCard, borderLeft:`1px solid ${C.borderCard}`,
+        display:"flex", flexDirection:"column",
+        transform: mounted ? "translateX(0)" : "translateX(100%)",
+        transition:"transform 0.28s ease",
+        boxShadow:"-8px 0 40px rgba(0,0,0,0.6)",
+      }}>
+        {/* Header */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+          padding:"12px 16px", borderBottom:`1px solid ${C.borderCard}` }}>
+          <span style={{ fontSize:10, fontFamily:"monospace", color: C.teal, letterSpacing:"0.15em", textTransform:"uppercase" }}>
+            SHAP Breakdown
+          </span>
+          <button onClick={onClose} style={{ background:"none", border:"none", color: C.textMuted,
+            cursor:"pointer", fontSize:20, lineHeight:1, padding:"0 4px" }}>×</button>
+        </div>
+
+        <div style={{ flex:1, overflowY:"auto", padding:"16px" }}>
+          {/* Info block */}
+          <div style={{ background:"#0a1a2e", borderRadius:8, padding:12, marginBottom:14,
+            fontSize:11, fontFamily:"monospace", lineHeight:1.8, border:`1px solid ${C.borderSub}` }}>
+            {[["USER", row.user], ["IP", row.ip], ["LOC", row.location], ["DEVICE", row.device]].map(([k,v]) => (
+              <div key={k}><span style={{ color: C.textMuted }}>{k} </span><span style={{ color: C.textWhite }}>{v}</span></div>
+            ))}
+            <div>
+              <span style={{ color: C.textMuted }}>RISK </span>
+              <span style={{ color: row.actionColor, fontWeight:"bold" }}>{row.riskScore.toFixed(2)}</span>
+              {"  "}
+              <span style={{ color: C.textMuted }}>TIER </span>
+              <span style={{ color: C.teal }}>{row.tier}</span>
+            </div>
+          </div>
+
+          {/* Feature bars */}
+          <div style={{ fontSize:10, fontFamily:"monospace", color: C.textMuted,
+            textTransform:"uppercase", letterSpacing:"0.12em", marginBottom:8 }}>
+            Feature Importance
+          </div>
+          {feats.map(f => {
+            const pct = (f.value / MAX_FEAT * 100).toFixed(1);
+            const col = FEAT_COLOR(f.value);
+            return (
+              <div key={f.name} style={{ marginBottom:8 }}>
+                <div style={{ display:"flex", justifyContent:"space-between",
+                  fontSize:10, fontFamily:"monospace", marginBottom:3 }}>
+                  <span style={{ color: C.textWhite }}>{f.name}</span>
+                  <span style={{ color: col }}>{f.value.toFixed(2)}</span>
+                </div>
+                <div style={{ height:5, background:"#0a1a2e", borderRadius:99, overflow:"hidden" }}>
+                  <div style={{ height:"100%", width:`${pct}%`, background: col,
+                    borderRadius:99, transition:"width 0.7s ease" }} />
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Explanation */}
+          <div style={{ background:"#0a1a2e", borderRadius:8, padding:12, marginTop:12,
+            border:`1px solid ${C.borderSub}` }}>
+            <div style={{ fontSize:10, fontFamily:"monospace", color: C.teal,
+              textTransform:"uppercase", letterSpacing:"0.12em", marginBottom:6 }}>
+              Auto-Analysis
+            </div>
+            <div style={{ fontSize:11, color:"#8bafc8", lineHeight:1.65 }}>{row.explanation}</div>
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div style={{ padding:"12px 16px", borderTop:`1px solid ${C.borderCard}`, display:"flex", flexDirection:"column", gap:8 }}>
+          {[
+            { label:"HARD BLOCK", type:"block", bg:"rgba(127,29,29,0.35)", border:"#7f1d1d", color: C.red },
+            { label:"ESCALATE",   type:"escalate", bg:"rgba(88,28,135,0.35)", border:"#6b21a8", color:"#c084fc" },
+            { label:"MARK SAFE",  type:"safe", bg:"rgba(20,83,45,0.35)", border:"#166534", color: C.green },
+          ].map(b => (
+            <button key={b.type} onClick={() => onAction(b.type, row)} style={{
+              padding:"8px 0", fontSize:11, fontFamily:"monospace", fontWeight:"bold",
+              letterSpacing:"0.12em", background: b.bg, border:`1px solid ${b.border}`,
+              color: b.color, borderRadius:6, cursor:"pointer", transition:"background 0.15s",
+            }}>
+              {b.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Stat Card ──
+function StatCard({ label, value, sub, valueColor, borderColor }) {
+  return (
+    <div style={{
+      flex:1, minWidth:0, background: C.bgCard,
+      border:`1.5px solid ${borderColor}`, borderRadius:12, padding:"16px 20px",
+    }}>
+      <div style={{ fontSize:10, fontFamily:"monospace", color: C.textLabel,
+        textTransform:"uppercase", letterSpacing:"0.15em", marginBottom:6 }}>
+        {label}
+      </div>
+      <div style={{ fontSize:36, fontWeight:"bold", fontFamily:"monospace", color: valueColor, lineHeight:1 }}>
+        {value}
+      </div>
+      <div style={{ fontSize:11, color: C.textMuted, marginTop:6 }}>{sub}</div>
+    </div>
+  );
+}
+
+// ── Feed Row ──
+function FeedRow({ row, onSelect, isSelected }) {
+  return (
+    <tr
+      onClick={() => onSelect(row)}
+      style={{
+        borderLeft:`2.5px solid ${row.borderColor}`,
+        background: isSelected ? "rgba(45,212,191,0.06)" : "transparent",
+        cursor:"pointer", transition:"background 0.12s",
+      }}
+      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
+      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
+    >
+      {[
+        fmtTime(row.time),
+        row.user,
+        row.ip,
+        row.location,
+        row.device,
+      ].map((v, i) => (
+        <td key={i} style={{
+          padding:"7px 12px", fontSize:11, fontFamily:"monospace",
+          color: i === 1 ? C.textWhite : C.textMuted,
+          maxWidth: i === 1 ? 160 : "none",
+          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+          display: i >= 3 ? undefined : undefined,
+        }}>
+          {v}
+        </td>
+      ))}
+      <td style={{ padding:"7px 12px", fontSize:11, fontFamily:"monospace",
+        fontWeight:"bold", color: row.actionColor }}>
+        {row.riskScore.toFixed(2)}
+      </td>
+      <td style={{ padding:"7px 12px", fontSize:11, fontFamily:"monospace",
+        fontWeight:"bold", color: row.actionColor, whiteSpace:"nowrap" }}>
+        {row.action}
+      </td>
+      <td style={{ padding:"7px 12px", fontSize:11, fontFamily:"monospace", color: C.textMuted }}>
+        {row.tier}
+      </td>
+      <td style={{ padding:"7px 12px" }}>
+        <button
+          onClick={e => { e.stopPropagation(); onSelect(row); }}
+          style={{ background:"none", border:"none", color: C.textMuted, cursor:"pointer",
+            fontSize:16, padding:"0 4px", transition:"color 0.12s" }}
+          onMouseEnter={e => e.currentTarget.style.color = C.teal}
+          onMouseLeave={e => e.currentTarget.style.color = C.textMuted}
+        >
+          ›
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+// ── Main Dashboard ──
+export default function SentinelDashboard() {
+  const [loginsToday, setLoginsToday] = useState(12877);
+  const [flagged,     setFlagged]     = useState(38);
+  const [blocked,     setBlocked]     = useState(7);
+  const [avgRisk,     setAvgRisk]     = useState(0.09);
+  const [feed,        setFeed]        = useState([]);
+  const [selected,    setSelected]    = useState(null);
+  const [clock,       setClock]       = useState(new Date());
+  const [toasts,      setToasts]      = useState([]);
+
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => setLoginsToday(n => n + Math.floor(Math.random()*3+1)), 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    let timer;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        const row = randomNormalLogin();
+        setFeed(f => [row, ...f].slice(0,80));
+        setLoginsToday(n => n + 1);
+        schedule();
+      }, 6000 + Math.random()*6000);
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  }, []);
+
+  const fireAttack = useCallback((key) => {
+    const a = ATTACKS[key];
+    const row = { id:crypto.randomUUID(), time:new Date(), ...a, isAttack:true };
+    setFeed(f => [row, ...f].slice(0,80));
+    setFlagged(n => n+1);
+    if (["HARD BLOCK","LOCK"].includes(a.action)) setBlocked(n => n+1);
+    setAvgRisk(r => +((r*0.95 + a.riskScore*0.05)).toFixed(3));
+    const toast = { id:crypto.randomUUID(), msg:`${a.icon} ${a.label} — ${a.action}` };
+    setToasts(t => [toast,...t].slice(0,4));
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== toast.id)), 4000);
+  }, []);
+
+  const handleAction = useCallback((type, row) => {
+    if (type === "block") setBlocked(n => n+1);
+    setFeed(f => f.map(r => r.id !== row.id ? r : {
+      ...r,
+      action: type==="block" ? "HARD BLOCK" : type==="escalate" ? "ESCALATED" : "SAFE ✓",
+      actionColor: type==="block" ? C.red : type==="escalate" ? "#c084fc" : C.green,
+      borderColor: type==="block" ? C.red : type==="escalate" ? "#7e22ce" : "#166534",
+    }));
+    setSelected(null);
+  }, []);
+
+  const npTime = clock.toLocaleTimeString("en-US", {
+    hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false,
+    timeZone:"Asia/Kathmandu",
+  });
+
+  const TH = { padding:"10px 12px", fontSize:10, fontFamily:"monospace",
+    color: C.teal, textTransform:"uppercase", letterSpacing:"0.12em",
+    textAlign:"left", fontWeight:"normal", borderBottom:`1px solid ${C.borderSub}` };
+
+  return (
+    <div style={{ minHeight:"100vh", background: C.bgMain, color: C.textWhite, position:"relative" }}>
+
+      {selected && (
+        <ShapPanel row={selected} onClose={() => setSelected(null)} onAction={handleAction} />
+      )}
+
+      {/* Toasts */}
+      <div style={{ position:"fixed", top:14, right:14, zIndex:60, display:"flex",
+        flexDirection:"column", gap:8, pointerEvents:"none" }}>
+        {toasts.map(t => (
+          <div key={t.id} style={{
+            background:"#0d1e30", border:`1px solid ${C.borderCard}`,
+            borderRadius:8, padding:"8px 14px", fontSize:11,
+            fontFamily:"monospace", color: C.textWhite,
+            boxShadow:"0 4px 24px rgba(0,0,0,0.5)",
+          }}>
+            {t.msg}
+          </div>
+        ))}
+      </div>
+
+      {/* ── Nav ── */}
+      <nav style={{
+        display:"flex", alignItems:"center", justifyContent:"space-between",
+        padding:"10px 24px", background: C.bgNav,
+        borderBottom:`1px solid ${C.borderSub}`,
+      }}>
+        <div style={{ display:"flex", alignItems:"center", gap:16 }}>
+          <span style={{ fontWeight:"bold", fontSize:18, letterSpacing:"-0.02em" }}>
+            <span style={{ color: C.textWhite }}>Sentinel</span>
+            <span style={{ color: C.teal }}>IQ</span>
+          </span>
+          <span style={{
+            fontSize:10, fontFamily:"monospace", color: C.teal,
+            border:`1px solid ${C.teal}`, borderRadius:20,
+            padding:"3px 12px", letterSpacing:"0.04em",
+          }}>
+            Challenge 8 — Auth Anomaly Detection
+          </span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:20,
+          fontSize:11, fontFamily:"monospace" }}>
+          <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <span style={{ width:7, height:7, borderRadius:"50%",
+              background: C.green, display:"inline-block",
+              boxShadow:`0 0 6px ${C.green}` }} />
+            <span style={{ color: C.green }}>LIVE</span>
+          </span>
+          <span style={{ color: C.teal }}>{npTime} NPT</span>
+          <span style={{ color: C.textMuted }}>
+            Security Ops · <span style={{ color:"#8bafc8" }}>[TEAM NAME]</span>
+          </span>
+        </div>
+      </nav>
+
+      <div style={{ padding:"24px" }}>
+
+        {/* ── Stats ── */}
+        <div style={{ display:"flex", gap:12, marginBottom:24, flexWrap:"wrap" }}>
+          <StatCard label="Logins Today"  value={fmtNum(loginsToday)} sub="↑ 4.2% vs yesterday" valueColor={C.teal}   borderColor={C.teal} />
+          <StatCard label="Flagged (24H)" value={flagged}             sub="Tier 2+ events"       valueColor={C.orange} borderColor={C.orange} />
+          <StatCard label="Blocked"       value={blocked}             sub="Tier 3 + Tier 4"      valueColor={C.red}    borderColor={C.red} />
+          <StatCard label="Avg Risk Score" value={avgRisk.toFixed(2)} sub="Normal baseline"      valueColor={C.green}  borderColor={C.green} />
+        </div>
+
+        {/* ── Live Risk Feed ── */}
+        <div style={{ marginBottom:24 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+            <span style={{ fontSize:10, fontFamily:"monospace", color: C.textLabel,
+              textTransform:"uppercase", letterSpacing:"0.18em" }}>
+              Live Risk Feed
+            </span>
+            <div style={{ flex:1, height:1, background: C.borderSub }} />
+          </div>
+          <div style={{ background: C.bgCard, border:`1px solid ${C.borderCard}`,
+            borderRadius:12, overflow:"hidden" }}>
+            <div style={{ overflowX:"auto", maxHeight:380, overflowY:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead style={{ position:"sticky", top:0, background: C.bgCard, zIndex:10 }}>
+                  <tr>
+                    {["Time","User","IP","IP / Location","Device","Risk Score","Action","Tier",""].map((h,i) => (
+                      <th key={i} style={TH}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {feed.length === 0 && (
+                    <tr>
+                      <td colSpan={9} style={{ textAlign:"center", padding:"60px 0",
+                        fontSize:11, fontFamily:"monospace", color: C.textDim }}>
+                        Waiting for events…
+                      </td>
+                    </tr>
+                  )}
+                  {feed.map(row => (
+                    <FeedRow key={row.id} row={row} onSelect={setSelected}
+                      isSelected={selected?.id === row.id} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Bottom row ── */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr", gap:16 }}>
+
+          {/* Attack Simulation */}
+          <div style={{ background: C.bgCard, border:`1px solid ${C.borderCard}`,
+            borderRadius:12, padding:"18px 20px" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:14 }}>
+              <span style={{ color: C.orange, fontSize:13 }}>⚡</span>
+              <span style={{ fontSize:10, fontFamily:"monospace", color: C.orange,
+                textTransform:"uppercase", letterSpacing:"0.15em" }}>
+                Attack Simulation — Demo Tool
+              </span>
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:10 }}>
+              {Object.entries(ATTACKS).map(([key, a]) => (
+                <button key={key} onClick={() => fireAttack(key)} style={{
+                  display:"flex", alignItems:"center", gap:8,
+                  padding:"10px 18px", background:"rgba(10,26,46,0.8)",
+                  border:`1px solid ${C.borderCard}`, borderRadius:8,
+                  fontSize:12, fontFamily:"monospace", color: C.textWhite,
+                  cursor:"pointer", transition:"all 0.15s",
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.borderColor = C.teal;
+                  e.currentTarget.style.background = "rgba(45,212,191,0.08)";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.borderColor = C.borderCard;
+                  e.currentTarget.style.background = "rgba(10,26,46,0.8)";
+                }}>
+                  <span style={{ fontSize:16 }}>{a.icon}</span>
+                  {a.label}
+                </button>
+              ))}
+            </div>
+            {/* Legend */}
+            <div style={{ display:"flex", gap:18, marginTop:14, flexWrap:"wrap" }}>
+              {[
+                { color:"#166534", label:"Allow" },
+                { color:"#ca8a04", label:"MFA Required" },
+                { color: C.orange, label:"Lock" },
+                { color: C.red,    label:"Hard Block" },
+              ].map(l => (
+                <span key={l.label} style={{ display:"flex", alignItems:"center",
+                  gap:5, fontSize:10, fontFamily:"monospace", color: C.textMuted }}>
+                  <span style={{ width:8, height:8, borderRadius:2, background: l.color,
+                    display:"inline-block" }} />
+                  {l.label}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Feature Importance */}
+          <div style={{ background: C.bgCard, border:`1px solid ${C.borderCard}`,
+            borderRadius:12, padding:"18px 20px" }}>
+            <div style={{ fontSize:10, fontFamily:"monospace", color: C.textLabel,
+              textTransform:"uppercase", letterSpacing:"0.15em", marginBottom:14 }}>
+              Feature Importance
+            </div>
+            {FEATURE_IMPORTANCE.map(f => {
+              const pct = (f.value / MAX_FEAT * 100).toFixed(1);
+              const col = FEAT_COLOR(f.value);
+              return (
+                <div key={f.name} style={{ marginBottom:7 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between",
+                    fontSize:10, fontFamily:"monospace", marginBottom:3 }}>
+                    <span style={{ color: C.textWhite }}>{f.name}</span>
+                    <span style={{ color: col }}>{f.value.toFixed(2)}</span>
+                  </div>
+                  <div style={{ height:4, background:"#0a1624", borderRadius:99, overflow:"hidden" }}>
+                    <div style={{ height:"100%", width:`${pct}%`, background: col,
+                      borderRadius:99, transition:"width 0.7s ease" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}

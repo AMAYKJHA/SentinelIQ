@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 
 import styles from "./page.module.css";
 import {
@@ -11,6 +13,7 @@ import {
 import { useBehavior } from "./useBehavior";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState<
@@ -54,6 +57,9 @@ export default function LoginPage() {
       }
 
       setStatus("success");
+      setTimeout(() => {
+        router.push("/dashboard");
+      }, 600);
     } catch (err: unknown) {
       setStatus("error");
       setErrorMsg(
@@ -66,13 +72,29 @@ export default function LoginPage() {
     <div className={styles.page}>
       {/* ── Navbar ──────────────────────────────────────────────────── */}
       <header className={styles.navbar}>
-        <a href="/" className={styles.logo}>
-          Innovators Wallet
+        <a href="/" className={styles.logoBlock}>
+          <span className={styles.logoMark}>
+            <Image
+              src="/icon.jpeg"
+              alt="SentinelIQ Pay"
+              width={40}
+              height={40}
+              priority
+            />
+          </span>
+          <span className={styles.brandCopy}>
+            <span className={styles.brandName}>SentinelIQ Pay</span>
+            <span className={styles.brandTag}>Trusted digital wallet</span>
+          </span>
         </a>
         <nav className={styles.navLinks}>
-          <a href="#">Features</a>
-          <a href="#">Security</a>
-          <a href="#">Pricing</a>
+          <a href="#">Scan & Pay</a>
+          <a href="#">Send Money</a>
+          <a href="#">Offers</a>
+          <a href="#">Support</a>
+          <a href="/signup" className={styles.ctaBtn}>
+            Create account
+          </a>
         </nav>
       </header>
 
@@ -94,7 +116,7 @@ export default function LoginPage() {
               </svg>
             </div>
             <h1 className={styles.title}>Welcome back</h1>
-            <p className={styles.subtitle}>Sign in to your Innovators Wallet</p>
+            <p className={styles.subtitle}>Sign in to your SentinelIQ Pay</p>
           </div>
 
           <form className={styles.form} onSubmit={handleSubmit} noValidate>
