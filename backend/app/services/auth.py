@@ -27,7 +27,7 @@ from app.core.config import settings
 from app.core.security import hash_password, verify_password
 from app.db.models import LoginEvent, LoginOutcome, User, UserDevice
 from app.deps import get_client_ip
-from app.detection.aggregate import RiskDecision, build_breakdown
+from app.detection.aggregate import RiskDecision, build_breakdown, derive_reasons
 from app.detection.behavioral import check_behavioral, get_profile, update_baseline
 from app.detection.device import (
     check_device, increment_device_login, mark_device_trusted, revoke_all_device_trust,
@@ -39,7 +39,7 @@ from app.schemas.auth import (
     LoginRequest, MfaRequestRequest, MfaVerifyRequest, RegisterRequest, RegisterVerifyRequest,
 )
 from app.services import lockout, mfa as mfa_svc
-from app.services import notifications, otp as otp_svc, sessions as session_svc
+from app.services import dashboard, notifications, otp as otp_svc, sessions as session_svc
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,26 @@ def _generic_invalid_credentials() -> HTTPException:
         status_code=401,
         detail={"code": "invalid_credentials", "message": "Invalid credentials"},
     )
+
+
+def _publish_login_event(
+    db: DbSession,
+    redis: Redis,
+    event: LoginEvent,
+    user_email: str | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Fire-and-forget publish to the admin dashboard SSE channel.
+
+    Caller must have already committed the event. We refresh to populate
+    server-side defaults (id, created_at) before serializing.
+    """
+    try:
+        db.refresh(event)
+    except Exception:
+        pass
+    payload = dashboard.event_payload(event, user_email=user_email, extra=extra)
+    asyncio.create_task(dashboard.publish_event(redis, payload))
 
 
 async def _send_register_otp_bg(email: str, name: str, otp: str) -> None:
@@ -225,12 +245,20 @@ async def login_flow(
     #    to switch to email verification. Trade-off: leaks account existence.
     if lockout.is_locked(user):
         await record_attempt(user.id, ip, redis)
-        db.add(LoginEvent(
+        ev = LoginEvent(
             user_id=user.id, ip_address=ip,
             outcome=LoginOutcome.blocked_velocity,
             device_fingerprint=login_request.device_spec.device_fingerprint,
-        ))
+            decision="locked",
+            breakdown={
+                "reasons": ["bruteforce_lockout"],
+                "lock_level": user.lock_level,
+                "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+            },
+        )
+        db.add(ev)
         db.commit()
+        _publish_login_event(db, redis, ev, user_email=user.email)
         raise HTTPException(status_code=401, detail={
             "code": "account_locked",
             "message": "Account temporarily locked due to repeated failures.",
@@ -257,13 +285,20 @@ async def login_flow(
     # Per-user / per-(user,ip) velocity check
     vel_res = await check_velocity(user_id=user.id, ip=ip, redis=redis)
     if vel_res.flagged:
-        db.add(LoginEvent(
+        ev = LoginEvent(
             user_id=user.id, ip_address=ip,
             outcome=LoginOutcome.blocked_velocity,
             device_fingerprint=login_request.device_spec.device_fingerprint,
             risk_score=1.0,
-        ))
+            decision="rate_limited",
+            breakdown={
+                "reasons": ["velocity_spike"],
+                "velocity": round(max(vel_res.user_risk, vel_res.ip_risk, vel_res.user_ip_risk), 4),
+            },
+        )
+        db.add(ev)
         db.commit()
+        _publish_login_event(db, redis, ev, user_email=user.email)
         raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
 
     # Run behavioral bot check AFTER user is confirmed (so a stuck JS sensor on
@@ -274,12 +309,25 @@ async def login_flow(
     if not real_password_ok:
         await record_attempt(user_id=user.id, ip=ip, redis=redis)
         lock_applied = lockout.register_failure(db, user)
-        db.add(LoginEvent(
+        is_hard = lockout.is_hard_blocked(user)
+        ev = LoginEvent(
             user_id=user.id, ip_address=ip,
             outcome=LoginOutcome.failed_credentials,
             device_fingerprint=login_request.device_spec.device_fingerprint,
-        ))
+            decision=("hard_block" if is_hard else ("locked" if lock_applied else "failed")),
+            breakdown={
+                "reasons": (
+                    ["hard_block"] if is_hard
+                    else ["bruteforce_lockout"] if lock_applied
+                    else ["invalid_credentials"]
+                ),
+                "lock_level": user.lock_level,
+                "failed_login_count": user.failed_login_count,
+            },
+        )
+        db.add(ev)
         db.commit()
+        _publish_login_event(db, redis, ev, user_email=user.email)
 
         if lock_applied:
             logger.info(
@@ -370,16 +418,21 @@ async def login_flow(
         {"v": breakdown.velocity, "g": breakdown.geo, "d": breakdown.device, "b": breakdown.behavioral},
     )
     debug_payload = _debug_payload(breakdown, device_res, ip, city, country) if settings.DEBUG else None
-    # ── BLOCK ──────────────────────────────────────────────────────────────
+    reasons = derive_reasons(breakdown, vel_res, geo_res, device_res, behavioral)
+    breakdown_dict = breakdown.to_dict(reasons=reasons)
+    # ── BLOCK ─────────────────────────────────────────────────────────────────
     if breakdown.decision is RiskDecision.BLOCK:
         event = LoginEvent(
             user_id=user.id, ip_address=ip, city=city, country=country,
             outcome=LoginOutcome.blocked_risk,
             device_fingerprint=login_request.device_spec.device_fingerprint,
             risk_score=breakdown.final,
+            decision="block",
+            breakdown=breakdown_dict,
         )
         db.add(event)
         db.commit()
+        _publish_login_event(db, redis, event, user_email=user.email)
 
         yes_token = await mfa_svc.create_magic_link(redis, {
             "kind": "yes", "user_id": user.id, "device_id": device_res.device_id, "ip": ip,
@@ -402,13 +455,17 @@ async def login_flow(
 
     # ── STEP-UP MFA ────────────────────────────────────────────────────────
     if breakdown.decision is RiskDecision.STEP_UP:
-        db.add(LoginEvent(
+        ev = LoginEvent(
             user_id=user.id, ip_address=ip, city=city, country=country,
             outcome=LoginOutcome.mfa_required,
             device_fingerprint=login_request.device_spec.device_fingerprint,
             risk_score=breakdown.final,
-        ))
+            decision="step_up",
+            breakdown=breakdown_dict,
+        )
+        db.add(ev)
         db.commit()
+        _publish_login_event(db, redis, ev, user_email=user.email)
 
         challenge_id = await mfa_svc.create_challenge(redis, {
             "user_id": user.id,
@@ -433,7 +490,7 @@ async def login_flow(
             **({"debug": debug_payload} if debug_payload else {}),
         }
 
-    # ── ALLOW ──────────────────────────────────────────────────────────────
+    # ── ALLOW ───────────────────────────────────────────────────────────────────────
     await _finalize_login(
         request=request, response=response, db=db, user=user,
         device_id=device_res.device_id,
@@ -445,6 +502,8 @@ async def login_flow(
         risk_score=breakdown.final,
         outcome=LoginOutcome.success,
         redis=redis,
+        decision="allow",
+        breakdown=breakdown_dict,
     )
 
     return {
@@ -573,12 +632,18 @@ async def mfa_verify_flow(
     country = challenge.get("country")
 
     # Record success event
-    db.add(LoginEvent(
+    ev = LoginEvent(
         user_id=user.id, ip_address=ip, city=city, country=country,
         outcome=LoginOutcome.mfa_verified,
         device_fingerprint=challenge.get("device_fingerprint"),
         risk_score=challenge.get("risk"),
-    ))
+        decision="mfa_verified",
+        breakdown={
+            "reasons": ["unlock" if challenge.get("unlock") else "mfa_verified"],
+            "risk": challenge.get("risk"),
+        },
+    )
+    db.add(ev)
     user.last_login_at = datetime.now(timezone.utc)
     if device_id:
         increment_device_login(db, device_id)
@@ -591,6 +656,7 @@ async def mfa_verify_flow(
         user_agent=challenge.get("user_agent"),
     )
     db.commit()
+    _publish_login_event(db, redis, ev, user_email=user.email)
     session_svc.set_auth_cookies(response, access, refresh)
 
     if challenge.get("is_new_device"):
@@ -698,13 +764,17 @@ async def _finalize_login(
     lat: float | None, lon: float | None,
     device_fingerprint: str, device_label: str, is_new_device: bool,
     behavioral_signals, risk_score: float, outcome: LoginOutcome, redis: Redis,
+    decision: str | None = None, breakdown: dict | None = None,
 ) -> None:
     user.last_login_at = datetime.now(timezone.utc)
-    db.add(LoginEvent(
+    ev = LoginEvent(
         user_id=user.id, ip_address=ip, city=city, country=country,
         outcome=outcome, device_fingerprint=device_fingerprint,
         risk_score=risk_score,
-    ))
+        decision=decision,
+        breakdown=breakdown,
+    )
+    db.add(ev)
     if device_id:
         increment_device_login(db, device_id)
     update_baseline(db, user.id, behavioral_signals, ip=ip)
@@ -715,6 +785,7 @@ async def _finalize_login(
         user_agent=request.headers.get("user-agent", ""),
     )
     db.commit()
+    _publish_login_event(db, redis, ev, user_email=user.email)
     session_svc.set_auth_cookies(response, access, refresh)
 
     if is_new_device:

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean, Integer, String, Float, DateTime, ForeignKey,
     func, UniqueConstraint, UUID, Enum, text
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 class Base(DeclarativeBase):
@@ -123,6 +124,8 @@ class LoginEvent(Base):
     device_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     outcome: Mapped[LoginOutcome] = mapped_column(Enum(LoginOutcome), server_default="failed_credentials")
+    decision: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class Session(Base):
