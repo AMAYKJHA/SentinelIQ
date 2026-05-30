@@ -1,0 +1,72 @@
+{
+  "model": "IsolationForest",
+  "n_estimators": 300,
+  "max_samples": 0.8,
+  "contamination": 0.04,
+  "n_features": 12,
+  "features": [
+    "hour_of_day",
+    "hour_deviation",
+    "distance_from_last_login_km",
+    "hours_since_last_login",
+    "impossible_travel",
+    "fail_count_before_success",
+    "user_account_age_days",
+    "velocity_spike_score",
+    "geo_time_risk",
+    "bot_score",
+    "trust_deficit_score",
+    "network_risk_score"
+  ],
+  "train_rows": 12786,
+  "test_rows": 2996,
+  "test_anomalies": 264,
+  "precision": 0.9038,
+  "recall": 0.8902,
+  "f1": 0.8969,
+  "false_positive_rate": 0.0852,
+  "thresholds": {
+    "T2_mfa": 0.593090597592058,
+    "T3_lock": 0.603090597592058,
+    "T4_block": 0.6145764406337968,
+    "post_filter": {
+      "network_risk_min": 0.05,
+      "geo_time_risk_min": 50
+    }
+  },
+  "latency_ms": {
+    "if_predict_mean": 29.41,
+    "if_predict_p99": 49.69,
+    "shap_mean": 146.97,
+    "shap_p99": 186.54,
+    "total_normal_ms": 29.44,
+    "total_flagged_ms": 176.41
+  },
+  "per_type_recall": {
+    "near_border_foreign_ip": {
+      "n": 56,
+      "recall": 1.0,
+      "avg_risk_score": 0.224
+    },
+    "new_device_suspicious_location": {
+      "n": 49,
+      "recall": 1.0,
+      "avg_risk_score": 0.25
+    },
+    "credential_stuffing": {
+      "n": 63,
+      "recall": 0.8,
+      "avg_risk_score": 0.248
+    },
+    "odd_hours_vpn": {
+      "n": 58,
+      "recall": 0.75,
+      "avg_risk_score": 0.271
+    },
+    "impossible_travel": {
+      "n": 59,
+      "recall": 1.0,
+      "avg_risk_score": 0.303
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "T2_mfa": 0.593090597592058,
+  "T3_lock": 0.603090597592058,
+  "T4_block": 0.6145764406337968,
+  "post_filter": {
+    "network_risk_min": 0.05,
+    "geo_time_risk_min": 50
+  }
+}
