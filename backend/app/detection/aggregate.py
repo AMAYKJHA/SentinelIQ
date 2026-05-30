@@ -22,6 +22,7 @@ class RiskBreakdown:
     device: float
     behavioral: float
     rule_based: float
+    ml: float
     final: float
     decision: RiskDecision
 
@@ -114,6 +115,7 @@ def build_breakdown(
         device=risks["device"],
         behavioral=risks["behavioral"],
         rule_based=round(rule_based, 4),
+        ml=round(_clamp(ml_risk or 0.0), 4),
         final=round(final, 4),
         decision=decide(final, device.is_trusted_device),
     )

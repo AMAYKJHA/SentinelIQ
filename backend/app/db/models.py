@@ -40,7 +40,7 @@ class LoginOutcome(str, enum.Enum):
 
 # ── Tables ───────────────────────────────────────────
 
-class User(Base):
+class User(Base, TimestampMixin):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -56,6 +56,9 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_login_count: Mapped[int] = mapped_column(Integer, server_default="0")
 
+    # Temporal account lock (escalating: 15 min → 1 h → 6 h → hard_block)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lock_level: Mapped[int] = mapped_column(Integer, server_default="0")
 
     behavior_profile: Mapped["UserBehaviorProfile"] = relationship(
         back_populates="user", uselist=False
